@@ -1,5 +1,13 @@
 import os
+import sys
 import requests
+
+# Validate required environment variables
+required_vars = ["AI_API_KEY", "GITHUB_TOKEN", "PR_NUMBER", "REPO_NAME"]
+missing = [v for v in required_vars if not os.environ.get(v)]
+if missing:
+    print(f"Error: missing required environment variables: {', '.join(missing)}", file=sys.stderr)
+    sys.exit(1)
 
 AI_API_KEY = os.environ["AI_API_KEY"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
@@ -7,6 +15,10 @@ PR_NUMBER = os.environ["PR_NUMBER"]
 REPO_NAME = os.environ["REPO_NAME"]
 
 # Read the PR diff
+if not os.path.exists("pr_diff.txt"):
+    print("Error: pr_diff.txt not found. Ensure the 'Get PR Diff' step ran successfully.", file=sys.stderr)
+    sys.exit(1)
+
 with open("pr_diff.txt", "r") as f:
     diff = f.read()
 
@@ -50,7 +62,12 @@ response = requests.post(
 )
 
 response.raise_for_status()
-suggestion = response.json()["choices"][0]["message"]["content"]
+data = response.json()
+choices = data.get("choices")
+if not choices or not choices[0].get("message", {}).get("content"):
+    print(f"Error: unexpected API response structure: {data}", file=sys.stderr)
+    sys.exit(1)
+suggestion = choices[0]["message"]["content"]
 
 # Post the suggestion as a PR comment
 comment_body = f"## 🤖 AI Refactoring Suggestions\n\n{suggestion}"
