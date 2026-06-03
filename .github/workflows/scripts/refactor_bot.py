@@ -1,57 +1,87 @@
 import os
-import json
+import sys
 import requests
 
-# 1. Load Environment Variables
-ai_api_key = os.environ.get('AI_API_KEY')
-github_token = os.environ.get('GITHUB_TOKEN')
-pr_number = os.environ.get('PR_NUMBER')
-repo_name = os.environ.get('REPO_NAME')
+# Validate required environment variables
+required_vars = ["AI_API_KEY", "GITHUB_TOKEN", "PR_NUMBER", "REPO_NAME"]
+missing = [v for v in required_vars if not os.environ.get(v)]
+if missing:
+    print(f"Error: missing required environment variables: {', '.join(missing)}", file=sys.stderr)
+    sys.exit(1)
 
-# 2. Read the PR Diff
-with open('pr_diff.txt', 'r') as file:
-    diff_content = file.read()
+AI_API_KEY = os.environ["AI_API_KEY"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+PR_NUMBER = os.environ["PR_NUMBER"]
+REPO_NAME = os.environ["REPO_NAME"]
 
-if not diff_content.strip():
-    print("No changes found.")
+# Read the PR diff
+if not os.path.exists("pr_diff.txt"):
+    print("Error: pr_diff.txt not found. Ensure the 'Get PR Diff' step ran successfully.", file=sys.stderr)
+    sys.exit(1)
+
+with open("pr_diff.txt", "r") as f:
+    diff = f.read()
+
+if not diff.strip():
+    print("No diff found, skipping.")
     exit(0)
 
-# 3. Call the AI API (Example using an OpenAI-like endpoint)
-# Adjust this to match whatever AI service you used for your assignment
-prompt = f"""
-You are an expert software engineer. Review the following code diff. 
-Identify areas for refactoring to improve cleanliness, efficiency, and maintainability.
-Provide:
-1. A brief explanation of why the changes are needed.
-2. The refactored code.
+# Truncate diff if too large to avoid exceeding model context limits
+MAX_DIFF_CHARS = 12000
+if len(diff) > MAX_DIFF_CHARS:
+    diff = diff[:MAX_DIFF_CHARS] + "\n\n[diff truncated]"
 
-Diff:
-{diff_content}
-"""
+# Call the OpenAI API to get refactoring suggestions
+response = requests.post(
+    "https://api.openai.com/v1/chat/completions",
+    headers={
+        "Authorization": "Bearer " + AI_API_KEY,
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a code review assistant specializing in refactoring. "
+                    "Analyze the provided git diff and suggest concrete, actionable "
+                    "refactoring improvements. Be concise and focus on the most impactful changes. "
+                    "Format your response as a GitHub pull request comment using markdown."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Please review this pull request diff and suggest refactoring improvements:\n\n```diff\n{diff}\n```",
+            },
+        ],
+        "max_tokens": 1024,
+        "temperature": 0.3,
+    },
+    timeout=60,
+)
 
-# Pseudo-code for your API request
-headers = {
-    "Authorization": f"Bearer {ai_api_key}",
-    "Content-Type": "application/json"
-}
-payload = {
-    "model": "your-chosen-model",
-    "messages": [{"role": "user", "content": prompt}]
-}
+response.raise_for_status()
+data = response.json()
+choices = data.get("choices")
+if not choices or not choices[0].get("message", {}).get("content"):
+    print(f"Error: unexpected API response structure: {data}", file=sys.stderr)
+    sys.exit(1)
+suggestion = choices[0]["message"]["content"]
 
-# Replace with your actual AI API URL
-response = requests.post("https://api.your-ai-provider.com/v1/chat/completions", headers=headers, json=payload)
-ai_reply = response.json()['choices'][0]['message']['content']
+# Post the suggestion as a PR comment
+comment_body = f"## 🤖 AI Refactoring Suggestions\n\n{suggestion}"
 
-# 4. Post the result back to GitHub as a PR Comment
-comment_url = f"https://api.github.com/repos/{repo_name}/issues/{pr_number}/comments"
-gh_headers = {
-    "Authorization": f"Bearer {github_token}",
-    "Accept": "application/vnd.github.v3+json"
-}
-comment_payload = {
-    "body": f"### 🤖 RefactorBot Suggestions\n\n{ai_reply}"
-}
+github_response = requests.post(
+    f"https://api.github.com/repos/{REPO_NAME}/issues/{PR_NUMBER}/comments",
+    headers={
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    },
+    json={"body": comment_body},
+    timeout=30,
+)
 
-requests.post(comment_url, headers=gh_headers, json=comment_payload)
-print("Successfully posted refactoring suggestions to PR!")
+github_response.raise_for_status()
+print(f"Posted refactoring suggestions to PR #{PR_NUMBER}")
