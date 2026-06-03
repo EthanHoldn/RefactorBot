@@ -1,0 +1,41 @@
+name: AI RefactorBot Reviewer
+
+# Trigger the action when a PR is opened or new code is pushed to it
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  ai-refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed to generate the diff
+
+      - name: Get PR Diff
+        id: get_diff
+        run: |
+          # Get the diff of the files changed in this PR
+          git diff origin/${{ github.base_ref }}...HEAD > pr_diff.txt
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests # or openai/anthropic sdks if you prefer
+
+      - name: Run RefactorBot Script
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.repository }}
+        run: python .github/scripts/refactor_bot.py
